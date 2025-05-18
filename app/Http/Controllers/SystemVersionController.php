@@ -18,8 +18,8 @@ use ZipArchive;
 class SystemVersionController extends Controller
 {
     public $githubRepo = 'AlumniTrackingSystem';
-    public $githubOwner = 'Yosores04';
-    public $githubBranch = 'integration';
+    public $githubOwner = 'GarcianoNilo';
+    public $githubBranch = 'master';
     
     /**
      * Create a new controller instance.
@@ -112,6 +112,23 @@ class SystemVersionController extends Controller
                 Log::info('No GitHub API token provided, using unauthenticated requests (lower rate limits apply)');
             }
             
+            // First get current version to preserve it
+            $currentVersion = SystemVersion::getCurrentVersion();
+            $currentVersionTag = $currentVersion ? $currentVersion->release_tag : null;
+            
+            // Refresh option: Clear existing versions and re-fetch all (except current)
+            // This ensures we have up-to-date metadata for existing versions
+            Log::info("Refreshing system versions data");
+            if ($currentVersionTag) {
+                // Keep the current version, remove all others
+                SystemVersion::where('is_current', false)->delete();
+                Log::info("Cleared all non-current system versions to refresh data");
+            } else {
+                // No current version set, clear all versions
+                SystemVersion::truncate();
+                Log::info("Cleared all system versions to refresh data");
+            }
+            
             // First try to get all releases
             Log::info("Checking for releases from GitHub repository: {$this->githubOwner}/{$this->githubRepo}");
             
@@ -165,15 +182,13 @@ class SystemVersionController extends Controller
                         continue;
                     }
                     
-                    // Check if this version is already in our database
-                    $existingVersion = SystemVersion::where('release_tag', $releaseTag)->first();
-                    
-                    if ($existingVersion) {
-                        Log::info("Release {$releaseTag} already exists in database, skipping");
-                        continue; // Skip this release as we already have it
+                    // Skip the current version if it exists
+                    if ($releaseTag === $currentVersionTag) {
+                        Log::info("Skipping current version: {$releaseTag}");
+                        continue;
                     }
                     
-                    Log::info("Adding new release: {$releaseTag}");
+                    Log::info("Adding release: {$releaseTag}");
                     
                     // Create a new version record
                     $version = new SystemVersion([
@@ -191,18 +206,20 @@ class SystemVersionController extends Controller
                 }
                 
                 if ($newVersionsCount > 0) {
-                    Log::info("Added {$newVersionsCount} new releases to available updates");
+                    Log::info("Added {$newVersionsCount} releases to available updates");
+                    // Even if we have releases, also check for tags to be comprehensive
+                    $this->checkForTags($headers, $currentVersionTag);
                     return redirect()->route('system.versions')
-                        ->with('success', "Found {$newVersionsCount} new version(s) and added to available updates.");
+                        ->with('success', "Successfully refreshed system versions. Found {$newVersionsCount} releases.");
                 } else {
-                    // Try tags if no new releases were found
-                    Log::info("No new releases found, checking tags instead");
-                    return $this->checkForTags($headers);
+                    // Try tags if no releases were found
+                    Log::info("No releases found, checking tags instead");
+                    return $this->checkForTags($headers, $currentVersionTag);
                 }
             } else {
                 // Releases don't exist or failed, try tags instead
                 Log::info("No releases found or API call unsuccessful, checking tags instead");
-                return $this->checkForTags($headers);
+                return $this->checkForTags($headers, $currentVersionTag);
             }
                 
         } catch (Exception $e) {
@@ -216,7 +233,7 @@ class SystemVersionController extends Controller
     /**
      * Check for tags if releases don't exist
      */
-    private function checkForTags($headers)
+    private function checkForTags($headers, $currentVersionTag = null)
     {
         try {
             // Try to get all tags
@@ -290,15 +307,13 @@ class SystemVersionController extends Controller
                     continue;
                 }
                 
-                // Check if this version is already in our database
-                $existingVersion = SystemVersion::where('release_tag', $tagName)->first();
-                
-                if ($existingVersion) {
-                    Log::info("Tag {$tagName} already exists in database, skipping");
-                    continue; // Skip this tag as we already have it
+                // Skip the current version if it exists
+                if ($tagName === $currentVersionTag) {
+                    Log::info("Skipping current version: {$tagName}");
+                    continue;
                 }
                 
-                Log::info("Adding new tag: {$tagName}");
+                Log::info("Adding tag: {$tagName}");
                 
                 // Create a new version record based on the tag
                 $version = new SystemVersion([
@@ -316,13 +331,13 @@ class SystemVersionController extends Controller
             }
             
             if ($newVersionsCount > 0) {
-                Log::info("Added {$newVersionsCount} new tags to available updates");
+                Log::info("Added {$newVersionsCount} tags to available updates");
                 return redirect()->route('system.versions')
-                    ->with('success', "Found {$newVersionsCount} new version(s) from tags and added to available updates.");
+                    ->with('success', "Successfully refreshed system versions. Found {$newVersionsCount} tags.");
             } else {
                 Log::info("No new tags found");
                 return redirect()->route('system.versions')
-                    ->with('info', "No new versions found. System is already aware of all available versions.");
+                    ->with('info', "System versions refreshed. No new versions found.");
             }
         } catch (Exception $e) {
             Log::error('Error checking for tags: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
